@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: openbuild-app
+    runtime: node
+    repo: https://github.com/paraxapp/openbuild.git
+    branch: main
+    buildCommand: npm run install:all && npm run build
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: PRIMARY_AUTH_DB
+        value: neon
+      - key: NEON_DATABASE_URL
+        sync: false
+      - key: SUPABASE_DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false
