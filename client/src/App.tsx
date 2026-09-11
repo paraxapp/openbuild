@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
-import { api, getToken, setToken, type ProjectData } from './api';
+import { api, getToken, setToken, listLocal, saveLocal, createLocal, deleteLocal, type ProjectData, type LocalProject } from './api';
 import {
   parseHtmlElements, patchHtmlText, addHtmlElement, buildSrcDoc,
-  parseCss, setCssProp, workflowToTS, mergeWorkflowGen, exportZip
+  parseCss, setCssProp, workflowToTS, mergeWorkflowGen, exportOpen, importOpen
 } from './builder';
 import WorkflowEditor from './components/WorkflowEditor';
 
@@ -13,77 +13,85 @@ export default function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [user, setUser] = useState<any>(null);
-  const [projects, setProjects] = useState<any[]>([]);
+  const [projects, setProjects] = useState<LocalProject[]>([]);
   const [name, setName] = useState('My site');
-  const [storage, setStorage] = useState('neon');
-  const [open, setOpen] = useState<{ storage: string; id: number } | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [data, setData] = useState<ProjectData | null>(null);
   const [tab, setTab] = useState<Tab>('vhtml');
   const [selEl, setSelEl] = useState(0);
   const [selCss, setSelCss] = useState('');
   const [msg, setMsg] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (getToken()) api.me().then((r) => setUser(r.user)).catch(() => setToken(null));
+    setProjects(listLocal());
   }, []);
-
-  async function refresh() {
-    const r = await api.listProjects();
-    setProjects(r.projects);
-  }
-  useEffect(() => { if (user) refresh().catch((e) => setMsg(e.message)); }, [user]);
 
   async function auth(mode: 'login' | 'register') {
     try {
       const r = mode === 'login' ? await api.login(email, password) : await api.register(email, password);
-      setToken(r.token); setUser(r.user); setMsg(`logged in (${r.authDb})`);
+      setToken(r.token); setUser(r.user); setMsg(`logged in (render)`);
     } catch (e: any) { setMsg(e.message); }
   }
 
-  async function create() {
-    try {
-      const r = await api.createProject(name, storage); // per-project choice
-      setMsg(`saved to ${storage}`);
-      await refresh();
-      setOpen({ storage, id: r.project.id });
-      setData(r.data);
-    } catch (e: any) { setMsg(e.message); }
-  }
-
-  async function openProject(p: any) {
-    const r = await api.getProject(p.storage || p.storage_provider, p.id);
-    setOpen({ storage: p.storage || p.storage_provider, id: p.id });
-    setData(r.data);
+  function create() {
+    const rec = createLocal(name || 'Untitled');
+    setProjects(listLocal());
+    setOpenId(rec.id);
+    setData(rec.data);
     setTab('vhtml');
   }
 
-  async function save() {
-    if (!open || !data) return;
-    try {
-      await api.saveProject(open.storage, open.id, data.name, data);
-      setMsg(`saved to ${open.storage} ✓`);
-      refresh();
-    } catch (e: any) { setMsg(e.message); }
+  function openProject(p: LocalProject) {
+    setOpenId(p.id);
+    setData(p.data);
+    setTab('vhtml');
   }
+
+  function save() {
+    if (!openId || !data) return;
+    setProjects(saveLocal(openId, data));
+    setMsg('saved locally ✓ (+ Download .open for backup)');
+  }
+
+  // autosave locally on edit (debounced-ish: direct write, small data)
+  useEffect(() => {
+    if (!openId || !data) return;
+    const t = setTimeout(() => saveLocal(openId, data), 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
 
   const els = useMemo(() => (data ? parseHtmlElements(data.html) : []), [data?.html]);
   const rules = useMemo(() => parseCss(data?.css || ''), [data?.css]);
-  useEffect(() => { if (!selCss && rules[0]) setSelCss(rules[0].selector); }, [rules]);
+  useEffect(() => { if (!selCss && rules[0]) setSelCss(rules[0].selector); }, [rules, selCss]);
 
-  function regenWorkflow(next = data) {
-    if (!next) return;
+  function regenWorkflow(next: ProjectData) {
     const fresh = workflowToTS(next.workflow.nodes);
-    const mergedTs = mergeWorkflowGen(next.ts, fresh);
-    setData({ ...next, ts: mergedTs, workflowGen: fresh });
+    setData({ ...next, ts: mergeWorkflowGen(next.ts, fresh), workflowGen: fresh });
   }
 
   async function download() {
     if (!data) return;
-    const blob = await exportZip(data); // free download
+    const blob = await exportOpen(data); // free .open download
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${data.name || 'openbuild'}.zip`;
+    a.download = `${(data.name || 'openbuild').replace(/[^\w\-]+/g, '_')}.open`;
     a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  async function onImportFile(f: File) {
+    try {
+      const d = await importOpen(f);
+      const rec = createLocal(d.name || f.name.replace(/\.open$/i, ''));
+      const all = saveLocal(rec.id, d);
+      setProjects(all);
+      setOpenId(rec.id);
+      setData(d);
+      setMsg(`imported ${f.name} ✓`);
+    } catch (e: any) { setMsg('import failed: ' + e.message); }
   }
 
   if (!user) {
@@ -91,7 +99,7 @@ export default function App() {
       <div className="wrap">
         <div className="card">
           <h2>OpenBuild — sign in</h2>
-          <p>Email-only auth for now. Projects save per-project to Neon or Supabase.</p>
+          <p>Accounts on Render. Projects stay local + <code>.open</code> files — no DB projects.</p>
           <div className="row">
             <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             <input placeholder="password (min 8)" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -109,41 +117,39 @@ export default function App() {
       <div className="row">
         <h2 style={{ margin: 0 }}>OpenBuild</h2>
         <span className="badge">{user.email}</span>
-        <button className="ghost" onClick={() => { setToken(null); setUser(null); setData(null); setOpen(null); }}>logout</button>
+        <span className="badge">render-only, local + .open</span>
+        <button className="ghost" onClick={() => { setToken(null); setUser(null); setData(null); setOpenId(null); }}>logout</button>
         <span style={{ flex: 1 }} />
-        {open && data && (<><button onClick={save}>Save to {open.storage}</button><button className="ghost" onClick={download}>Download zip (free)</button></>)}
+        {openId && data && (<><button onClick={save}>Save local</button><button className="ghost" onClick={download}>Download .open (free)</button></>)}
       </div>
       {msg && <p>{msg}</p>}
 
-      {!open || !data ? (
+      {!openId || !data ? (
         <div className="card">
-          <h3>Projects</h3>
+          <h3>Projects (local, no DB)</h3>
           <div className="row">
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="project name" />
-            <select value={storage} onChange={(e) => setStorage(e.target.value)}>
-              <option value="neon">save to Neon</option>
-              <option value="supabase">save to Supabase</option>
-            </select>
             <button onClick={create}>New project</button>
-            <button className="ghost" onClick={refresh}>Refresh</button>
+            <button className="ghost" onClick={() => fileRef.current?.click()}>Open .open…</button>
+            <input ref={fileRef} type="file" accept=".open,.zip" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) onImportFile(f); e.target.value = ''; }} />
           </div>
           <div style={{ marginTop: 12 }}>
             {projects.map((p) => (
-              <div key={`${p.storage || p.storage_provider}-${p.id}`} className="row" style={{ marginBottom: 6 }}>
-                <span className="badge">{p.storage || p.storage_provider}</span>
-                <b>{p.name}</b><span>#{p.id}</span>
+              <div key={p.id} className="row" style={{ marginBottom: 6 }}>
+                <b>{p.data.name}</b><span>{p.id}</span>
                 <button className="ghost" onClick={() => openProject(p)}>Open</button>
+                <button className="ghost" onClick={() => setProjects(deleteLocal(p.id))}>Delete</button>
               </div>
             ))}
-            {projects.length === 0 && <p>No projects yet — create one.</p>}
+            {projects.length === 0 && <p>No local projects yet — create one or open a .open file.</p>}
           </div>
         </div>
       ) : (
         <div>
           <div className="row">
             <input value={data.name} onChange={(e) => setData({ ...data, name: e.target.value })} />
-            <span className="badge">storage: {open.storage} (per-project)</span>
-            <button className="ghost" onClick={() => { setOpen(null); setData(null); }}>← back</button>
+            <span className="badge">local: {openId}</span>
+            <button className="ghost" onClick={() => { setOpenId(null); setData(null); setProjects(listLocal()); }}>← back</button>
           </div>
           <div className="tabs">
             {([['vhtml', 'Visual HTML'], ['chtml', 'Code HTML'], ['vcss', 'Visual CSS'], ['ccss', 'Code CSS'], ['js', 'JS'], ['ts', 'TS'], ['flow', 'Workflow'], ['preview', 'Preview']] as [Tab, string][]).map(([t, l]) => (
@@ -188,11 +194,11 @@ export default function App() {
                 ))}
               </div>
               <div className="card">
-                <h4>{selCss || 'pick selector'} (sliders → patch CSS)</h4>
+                <h4>{selCss || 'pick selector'} (→ patch CSS)</h4>
                 {['color', 'background', 'font-size', 'padding', 'margin', 'display'].map((k) => (
                   <div key={k} className="row" style={{ marginBottom: 6 }}>
                     <span style={{ width: 100 }}>{k}</span>
-                    <input value={rules.find((r) => r.selector === selCss)?.props[k] || ''} onChange={(e) => data && selCss && setData({ ...data, css: setCssProp(data.css, selCss, k, e.target.value) })} placeholder={k === 'color' ? '#111' : k} />
+                    <input value={rules.find((r) => r.selector === selCss)?.props[k] || ''} onChange={(e) => data && selCss && setData({ ...data, css: setCssProp(data.css, selCss, k, e.target.value) })} placeholder={k} />
                   </div>
                 ))}
                 <pre className="code">{data.css}</pre>
@@ -217,7 +223,7 @@ export default function App() {
             <div className="card">
               <WorkflowEditor
                 nodes={data.workflow.nodes} edges={data.workflow.edges}
-                onChange={(n, e) => { const next = { ...data, workflow: { nodes: n, edges: e } }; regenWorkflow(next); }}
+                onChange={(n, e) => regenWorkflow({ ...data, workflow: { nodes: n, edges: e } })}
               />
               <h4>Generated workflow.gen.ts → TypeScript</h4>
               <pre className="code">{data.workflowGen}</pre>

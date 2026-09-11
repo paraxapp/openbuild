@@ -12,11 +12,7 @@ services:
         value: production
       - key: PORT
         value: 10000
-      - key: PRIMARY_AUTH_DB
-        value: neon
-      - key: NEON_DATABASE_URL
-        sync: false
-      - key: SUPABASE_DATABASE_URL
+      - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
         generateValue: true

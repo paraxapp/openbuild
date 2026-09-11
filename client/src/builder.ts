@@ -127,6 +127,38 @@ export function mergeWorkflowGen(existingTs: string, freshGen: string): string {
   );
 }
 
+export async function exportOpen(d: ProjectData): Promise<Blob> {
+  // .open = zip bundle (project.json + code + workflow). Free download.
+  return exportZip(d);
+}
+
+export async function importOpen(file: Blob): Promise<ProjectData> {
+  const zip = await JSZip.loadAsync(file);
+  const read = async (n: string) => {
+    const f = zip.file(n);
+    return f ? f.async('string') : '';
+  };
+  const pj = await read('project.json');
+  if (pj) {
+    const d = JSON.parse(pj);
+    if (d && typeof d.html === 'string') return d as ProjectData;
+  }
+  // Fallback: reconstruct from code files.
+  const html = await read('index.html');
+  const css = await read('styles.css');
+  const js = await read('app.js');
+  const ts = await read('app.ts');
+  const wj = await read('workflow.json');
+  const wg = await read('workflow.gen.ts');
+  return {
+    name: 'Imported',
+    html: html || '<main></main>',
+    css, js, ts,
+    workflow: wj ? JSON.parse(wj) : { nodes: [], edges: [] },
+    workflowGen: wg
+  };
+}
+
 export async function exportZip(d: ProjectData): Promise<Blob> {
   const zip = new JSZip();
   zip.file('index.html', `<!doctype html>\n<html>\n<head>\n<link rel="stylesheet" href="styles.css">\n</head>\n<body>\n${d.html}\n<script src="app.js"><\/script>\n</body>\n</html>`);
