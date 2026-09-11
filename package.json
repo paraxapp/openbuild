@@ -2,12 +2,11 @@
   "name": "openbuild-private",
   "version": "0.1.0",
   "private": true,
-  "description": "OpenBuild private app - visual HTML/CSS/TS + workflow builder (Render Web Service)",
+  "description": "OpenBuild private app - visual HTML/CSS/TS + workflow builder (Render, no DB)",
   "scripts": {
     "install:all": "npm install --prefix server && npm install --prefix client",
     "build": "npm run build --prefix client",
     "start": "node server/src/index.js",
-    "migrate": "node server/src/migrate.js",
     "dev:server": "node server/src/index.js"
   }
 }

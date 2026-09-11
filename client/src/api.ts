@@ -1,24 +1,5 @@
-const KEY = 'openbuild_token';
+// No backend auth, no DB. Local profile + local projects + .open files.
 const LS_PROJECTS = 'openbuild_projects_v1';
-
-export function getToken() { return localStorage.getItem(KEY); }
-export function setToken(t: string | null) { t ? localStorage.setItem(KEY, t) : localStorage.removeItem(KEY); }
-
-async function req(path: string, opts: RequestInit = {}) {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(opts.headers as any) };
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const r = await fetch(path, { ...opts, headers });
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.error || `request failed: ${r.status}`);
-  return body;
-}
-
-export const api = {
-  register: (email: string, password: string) => req('/api/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  login: (email: string, password: string) => req('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  me: () => req('/api/auth/me'),
-};
 
 export type ProjectData = {
   name: string;
@@ -52,7 +33,6 @@ export function defaultProjectData(name: string): ProjectData {
   };
 }
 
-// ---- Local projects (no DB projects). Stored in localStorage per browser.
 export type LocalProject = { id: string; updatedAt: string; data: ProjectData };
 
 export function listLocal(): LocalProject[] {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
-import { api, getToken, setToken, listLocal, saveLocal, createLocal, deleteLocal, type ProjectData, type LocalProject } from './api';
+import { listLocal, saveLocal, createLocal, deleteLocal, type ProjectData, type LocalProject } from './api';
 import {
   parseHtmlElements, patchHtmlText, addHtmlElement, buildSrcDoc,
   parseCss, setCssProp, workflowToTS, mergeWorkflowGen, exportOpen, importOpen
@@ -10,9 +10,6 @@ import WorkflowEditor from './components/WorkflowEditor';
 type Tab = 'vhtml' | 'chtml' | 'vcss' | 'ccss' | 'js' | 'ts' | 'flow' | 'preview';
 
 export default function App() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [user, setUser] = useState<any>(null);
   const [projects, setProjects] = useState<LocalProject[]>([]);
   const [name, setName] = useState('My site');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -23,17 +20,7 @@ export default function App() {
   const [msg, setMsg] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (getToken()) api.me().then((r) => setUser(r.user)).catch(() => setToken(null));
-    setProjects(listLocal());
-  }, []);
-
-  async function auth(mode: 'login' | 'register') {
-    try {
-      const r = mode === 'login' ? await api.login(email, password) : await api.register(email, password);
-      setToken(r.token); setUser(r.user); setMsg(`logged in (render)`);
-    } catch (e: any) { setMsg(e.message); }
-  }
+  useEffect(() => { setProjects(listLocal()); }, []);
 
   function create() {
     const rec = createLocal(name || 'Untitled');
@@ -55,7 +42,6 @@ export default function App() {
     setMsg('saved locally ✓ (+ Download .open for backup)');
   }
 
-  // autosave locally on edit (debounced-ish: direct write, small data)
   useEffect(() => {
     if (!openId || !data) return;
     const t = setTimeout(() => saveLocal(openId, data), 800);
@@ -74,7 +60,7 @@ export default function App() {
 
   async function download() {
     if (!data) return;
-    const blob = await exportOpen(data); // free .open download
+    const blob = await exportOpen(data);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${(data.name || 'openbuild').replace(/[^\w\-]+/g, '_')}.open`;
@@ -94,31 +80,11 @@ export default function App() {
     } catch (e: any) { setMsg('import failed: ' + e.message); }
   }
 
-  if (!user) {
-    return (
-      <div className="wrap">
-        <div className="card">
-          <h2>OpenBuild — sign in</h2>
-          <p>Accounts on Render. Projects stay local + <code>.open</code> files — no DB projects.</p>
-          <div className="row">
-            <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-            <input placeholder="password (min 8)" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <button onClick={() => auth('login')}>Login</button>
-            <button className="ghost" onClick={() => auth('register')}>Register</button>
-          </div>
-          {msg && <p>{msg}</p>}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="wrap">
       <div className="row">
         <h2 style={{ margin: 0 }}>OpenBuild</h2>
-        <span className="badge">{user.email}</span>
-        <span className="badge">render-only, local + .open</span>
-        <button className="ghost" onClick={() => { setToken(null); setUser(null); setData(null); setOpenId(null); }}>logout</button>
+        <span className="badge">no DB · local + .open · render-only</span>
         <span style={{ flex: 1 }} />
         {openId && data && (<><button onClick={save}>Save local</button><button className="ghost" onClick={download}>Download .open (free)</button></>)}
       </div>
@@ -126,7 +92,7 @@ export default function App() {
 
       {!openId || !data ? (
         <div className="card">
-          <h3>Projects (local, no DB)</h3>
+          <h3>Projects (local, no DB, no login)</h3>
           <div className="row">
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="project name" />
             <button onClick={create}>New project</button>
@@ -153,7 +119,7 @@ export default function App() {
           </div>
           <div className="tabs">
             {([['vhtml', 'Visual HTML'], ['chtml', 'Code HTML'], ['vcss', 'Visual CSS'], ['ccss', 'Code CSS'], ['js', 'JS'], ['ts', 'TS'], ['flow', 'Workflow'], ['preview', 'Preview']] as [Tab, string][]).map(([t, l]) => (
-              <button key={t} className={tab === t ? 'active' : 'ghost'} onClick={() => setTab(t)}>{l}</button>
+              <button key={t} className={tab === t ? '' : 'ghost'} onClick={() => setTab(t)}>{l}</button>
             ))}
           </div>
 
