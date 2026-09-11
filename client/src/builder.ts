@@ -1,11 +1,12 @@
 import JSZip from 'jszip';
 import type { ProjectData, WFNode } from './api';
+import { migrateProject, activePage } from './api';
 
 // ---- HTML visual helpers (code is truth: DOM mutate -> serialize back to code string)
 export function parseHtmlElements(html: string): { path: string; tag: string; text: string }[] {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const els = Array.from(doc.body.querySelectorAll('*'));
-  return els.slice(0, 200).map((el, i) => ({
+  return els.slice(0, 300).map((el, i) => ({
     path: `${i}:${el.tagName.toLowerCase()}${el.getAttribute('data-ob') ? '#' + el.getAttribute('data-ob') : ''}`,
     tag: el.tagName.toLowerCase(),
     text: (el.textContent || '').trim().slice(0, 80),
@@ -21,21 +22,80 @@ export function patchHtmlText(html: string, index: number, newText: string): str
   return doc.body.innerHTML;
 }
 
-export function addHtmlElement(html: string, tag: string): string {
-  const safe = ['h1', 'p', 'button', 'div'].includes(tag) ? tag : 'div';
-  return `${html}\n<${safe} data-ob="n${Date.now() % 10000}">New ${safe}</${safe}>`;
+export function deleteHtmlElement(html: string, index: number): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const els = doc.body.querySelectorAll('*');
+  const el = els[index];
+  if (!el) return html;
+  el.remove();
+  return doc.body.innerHTML;
 }
 
-export function buildSrcDoc(d: ProjectData): string {
-  const js = `${d.js || ''}\n\n/* workflow.gen */\n${stripTypes(d.workflowGen || '')}`;
-  return `<!doctype html><html><head><style>${d.css || ''}</style></head><body>${d.html || ''}<script>${js}<\/script></body></html>`;
+export function moveHtmlElement(html: string, from: number, to: number): string {
+  if (from === to) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const els = Array.from(doc.body.querySelectorAll('*'));
+  const el = els[from];
+  const target = els[to];
+  if (!el) return html;
+  const clone = el.cloneNode(true);
+  el.remove();
+  if (!target) { doc.body.appendChild(clone); return doc.body.innerHTML; }
+  if (from < to) target.after(clone); else target.before(clone);
+  return doc.body.innerHTML;
+}
+
+export type PaletteKind = 'heading' | 'text' | 'button' | 'image' | 'input' | 'box';
+
+export const PALETTE: { kind: PaletteKind; label: string }[] = [
+  { kind: 'heading', label: 'Heading' },
+  { kind: 'text', label: 'Text' },
+  { kind: 'button', label: 'Button' },
+  { kind: 'image', label: 'Image' },
+  { kind: 'input', label: 'Input' },
+  { kind: 'box', label: 'Container' },
+];
+
+export function paletteSnippet(kind: PaletteKind): string {
+  const id = `n${Date.now() % 100000}`;
+  switch (kind) {
+    case 'heading': return `<h2 data-ob="${id}">New heading</h2>`;
+    case 'text': return `<p data-ob="${id}">New text — drag to reorder.</p>`;
+    case 'button': return `<button data-ob="${id}" onclick="onCta()">New button</button>`;
+    case 'image': return `<img data-ob="${id}" src="https://picsum.photos/640/360" alt="image" style="max-width:100%;border-radius:8px" />`;
+    case 'input': return `<input data-ob="${id}" placeholder="Type here" />`;
+    default: return `<div data-ob="${id}" class="box" style="padding:16px;border:1px dashed #999;border-radius:8px">Container</div>`;
+  }
+}
+
+export function addHtmlElement(html: string, tag: string): string {
+  const map: Record<string, PaletteKind> = { h1: 'heading', h2: 'heading', p: 'text', button: 'button', img: 'image', input: 'input', div: 'box' };
+  return `${html}\n${paletteSnippet(map[tag] || 'box')}`;
+}
+
+export function dropPalette(html: string, kind: PaletteKind, atIndex?: number): string {
+  const snippet = paletteSnippet(kind);
+  if (atIndex === undefined) return `${html}\n${snippet}`;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const els = doc.body.querySelectorAll('*');
+  const target = els[atIndex];
+  const tmp = new DOMParser().parseFromString(snippet, 'text/html');
+  const node = tmp.body.firstChild;
+  if (!node) return html;
+  if (!target) doc.body.appendChild(node);
+  else target.before(node);
+  return doc.body.innerHTML;
+}
+
+export function buildSrcDoc(d: ProjectData, pageId?: string): string {
+  const dd = migrateProject(d as any);
+  const pg = pageId ? dd.pages.find((p) => p.id === pageId) || activePage(dd) : activePage(dd);
+  const js = `${dd.js || ''}\n\n/* workflow.gen */\n${stripTypes(dd.workflowGen || '')}`;
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${pg.css || ''}</style></head><body>${pg.html || ''}<script>${js}<\/script></body></html>`;
 }
 
 function stripTypes(ts: string): string {
-  // minimal TS -> JS for preview (type annotations, export keyword)
-  return ts
-    .replace(/export\s+/g, '')
-    .replace(/:\s*(string|number|boolean|void|any)\b/g, '');
+  return ts.replace(/export\s+/g, '').replace(/:\s*(string|number|boolean|void|any)\b/g, '');
 }
 
 // ---- CSS visual helpers
@@ -43,8 +103,7 @@ export type CSSRule = { selector: string; props: Record<string, string> };
 
 export function parseCss(css: string): CSSRule[] {
   const rules: CSSRule[] = [];
-  const blocks = css.split('}');
-  for (const b of blocks) {
+  for (const b of css.split('}')) {
     const parts = b.split('{');
     if (parts.length !== 2) continue;
     const selector = parts[0].trim();
@@ -78,7 +137,7 @@ export function setCssProp(css: string, selector: string, key: string, value: st
 
 // ---- Workflow (Unreal-style) -> TypeScript codegen
 export function workflowToTS(nodes: WFNode[]): string {
-  const lines: string[] = [
+  const lines = [
     '// AUTO-GENERATED from visual workflow. Edit visually; hand edits between markers are preserved on regenerate.',
     '// @visual-begin',
   ];
@@ -86,8 +145,7 @@ export function workflowToTS(nodes: WFNode[]): string {
   const actions = nodes.filter((n) => n.type !== 'trigger');
   if (triggers.length === 0) lines.push('export function onWorkflow(): void {');
   for (const t of triggers) {
-    const fn = sanitizeFn(t.label || t.id);
-    lines.push(`export function ${fn}(): void {`);
+    lines.push(`export function ${sanitizeFn(t.label || t.id)}(): void {`);
     lines.push(`  // @visual-node ${t.id}`);
     for (const a of actions) lines.push(`  ${actionToTS(a)}`);
     lines.push('}');
@@ -103,14 +161,10 @@ export function workflowToTS(nodes: WFNode[]): string {
 function actionToTS(a: WFNode): string {
   const d = (a.detail || '').replace(/'/g, "\\'");
   switch (a.type) {
-    case 'log':
-      return `console.log('${d || a.label}'); // @visual-node ${a.id}`;
-    case 'setText':
-      return `document.querySelector('[data-ob]')!.textContent = '${d || a.label}'; // @visual-node ${a.id}`;
-    case 'fetch':
-      return `fetch('${d || 'https://example.com/api'}').then(r => r.json()).then(console.log); // @visual-node ${a.id}`;
-    default:
-      return `// ${a.label} // @visual-node ${a.id}`;
+    case 'log': return `console.log('${d || a.label}'); // @visual-node ${a.id}`;
+    case 'setText': return `document.querySelector('[data-ob]')!.textContent = '${d || a.label}'; // @visual-node ${a.id}`;
+    case 'fetch': return `fetch('${d || 'https://example.com/api'}').then(r => r.json()).then(console.log); // @visual-node ${a.id}`;
+    default: return `// ${a.label} // @visual-node ${a.id}`;
   }
 }
 
@@ -119,7 +173,6 @@ function sanitizeFn(s: string): string {
   return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(c) ? c : 'onWorkflow';
 }
 
-// Merge regenerate: keep hand-written TS outside markers, replace inside.
 export function mergeWorkflowGen(existingTs: string, freshGen: string): string {
   if (!existingTs.includes('// @visual-begin')) return `${existingTs}\n\n${freshGen}`;
   return existingTs.replace(/\/\/ @visual-begin[\s\S]*?\/\/ @visual-end/, () =>
@@ -128,8 +181,18 @@ export function mergeWorkflowGen(existingTs: string, freshGen: string): string {
 }
 
 export async function exportOpen(d: ProjectData): Promise<Blob> {
-  // .open = zip bundle (project.json + code + workflow). Free download.
-  return exportZip(d);
+  const dd = migrateProject(d as any);
+  const zip = new JSZip();
+  for (const p of dd.pages) {
+    zip.file(p.file, `<!doctype html>\n<html>\n<head>\n<link rel="stylesheet" href="${p.file.replace(/\.html$/, '.css')}">\n</head>\n<body>\n${p.html}\n<script src="app.js"><\/script>\n</body>\n</html>`);
+    zip.file(p.file.replace(/\.html$/, '.css'), p.css || '');
+  }
+  zip.file('app.js', `${dd.js || ''}\n\n${stripTypes(dd.workflowGen || '')}`);
+  zip.file('app.ts', dd.ts || '');
+  zip.file('workflow.gen.ts', dd.workflowGen || '');
+  zip.file('workflow.json', JSON.stringify(dd.workflow, null, 2));
+  zip.file('project.json', JSON.stringify(dd, null, 2));
+  return zip.generateAsync({ type: 'blob' });
 }
 
 export async function importOpen(file: Blob): Promise<ProjectData> {
@@ -139,34 +202,16 @@ export async function importOpen(file: Blob): Promise<ProjectData> {
     return f ? f.async('string') : '';
   };
   const pj = await read('project.json');
-  if (pj) {
-    const d = JSON.parse(pj);
-    if (d && typeof d.html === 'string') return d as ProjectData;
-  }
-  // Fallback: reconstruct from code files.
+  if (pj) return migrateProject(JSON.parse(pj));
   const html = await read('index.html');
-  const css = await read('styles.css');
-  const js = await read('app.js');
-  const ts = await read('app.ts');
+  const css = await read('index.css');
+  const base = migrateProject({ name: 'Imported' } as any);
+  if (html) base.pages[0].html = html;
+  if (css) base.pages[0].css = css;
+  base.js = await read('app.js');
+  base.ts = await read('app.ts');
   const wj = await read('workflow.json');
-  const wg = await read('workflow.gen.ts');
-  return {
-    name: 'Imported',
-    html: html || '<main></main>',
-    css, js, ts,
-    workflow: wj ? JSON.parse(wj) : { nodes: [], edges: [] },
-    workflowGen: wg
-  };
-}
-
-export async function exportZip(d: ProjectData): Promise<Blob> {
-  const zip = new JSZip();
-  zip.file('index.html', `<!doctype html>\n<html>\n<head>\n<link rel="stylesheet" href="styles.css">\n</head>\n<body>\n${d.html}\n<script src="app.js"><\/script>\n</body>\n</html>`);
-  zip.file('styles.css', d.css || '');
-  zip.file('app.js', `${d.js || ''}\n\n${stripTypes(d.workflowGen || '')}`);
-  zip.file('app.ts', d.ts || '');
-  zip.file('workflow.gen.ts', d.workflowGen || '');
-  zip.file('workflow.json', JSON.stringify(d.workflow, null, 2));
-  zip.file('project.json', JSON.stringify(d, null, 2));
-  return zip.generateAsync({ type: 'blob' });
+  if (wj) base.workflow = JSON.parse(wj);
+  base.workflowGen = await read('workflow.gen.ts');
+  return base;
 }
